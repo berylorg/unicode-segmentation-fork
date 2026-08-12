@@ -34,6 +34,23 @@
 //! }
 //! ```
 //!
+//! Word boundaries can also be traversed over bounded, non-contiguous chunks:
+//!
+//! ```rust
+//! use unicode_segmentation::{WordCursor, WordCursorResult};
+//!
+//! let text = "can't stop";
+//! let mut cursor = WordCursor::new(0, text.len()).unwrap();
+//! assert_eq!(
+//!     cursor.next_boundary(&text[..4], 0).unwrap(),
+//!     WordCursorResult::NextChunk(4),
+//! );
+//! assert_eq!(
+//!     cursor.next_boundary(&text[4..7], 4).unwrap(),
+//!     WordCursorResult::Boundary(5),
+//! );
+//! ```
+//!
 //! # no_std
 //!
 //! unicode-segmentation does not depend on libstd, so it can be used in crates
@@ -64,12 +81,14 @@ pub use grapheme::{GraphemeIndices, Graphemes};
 pub use sentence::{USentenceBoundIndices, USentenceBounds, UnicodeSentences};
 pub use tables::UNICODE_VERSION;
 pub use word::{UWordBoundIndices, UWordBounds, UnicodeWordIndices, UnicodeWords};
+pub use word_cursor::{WordCursor, WordCursorError, WordCursorResult};
 
 mod grapheme;
 mod sentence;
 #[rustfmt::skip]
 mod tables;
 mod word;
+mod word_cursor;
 
 /// Methods for segmenting strings according to
 /// [Unicode Standard Annex #29](http://www.unicode.org/reports/tr29/).
