@@ -176,14 +176,19 @@ enum GraphemeState {
     /// it is preceded by an even number of RIS codepoints. (GB12, GB13)
     Regional,
     /// The codepoint after is Extended_Pictographic,
-    /// so whether it's a boundary depends on pre-context according to GB11.
+    /// so whether it's a boundary depends on finding an immediately preceding ZWJ
+    /// according to GB11.
     Emoji,
+    /// The required ZWJ for GB11 has been consumed, so reverse pre-context scanning
+    /// continues through `Extend*` in search of an Extended_Pictographic.
+    EmojiExtends,
 }
 
 /// Cursor-based segmenter for grapheme clusters.
 ///
 /// This allows working with ropes and other datastructures where the string is not contiguous or
-/// fully known at initialization time.
+/// fully known at initialization time. The cursor retains only fixed-size segmentation state, not
+/// supplied chunks or source text.
 #[derive(Clone, Debug)]
 pub struct GraphemeCursor {
     /// Current cursor position.
@@ -395,6 +400,10 @@ impl GraphemeCursor {
     /// The end of the chunk must coincide with the value given in the
     /// `GraphemeIncomplete::PreContext` request.
     ///
+    /// Requested pre-context may be supplied as any sequence of exact adjacent UTF-8 chunks. A
+    /// boundary decision is independent of how that context is partitioned, including when each
+    /// chunk contains only one scalar value.
+    ///
     /// ```rust
     /// # use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
     /// let flags = "\u{1F1F7}\u{1F1F8}\u{1F1EE}\u{1F1F4}";
@@ -416,7 +425,9 @@ impl GraphemeCursor {
         self.pre_context_offset = None;
         if self.is_extended && chunk_start + chunk.len() == self.offset {
             let ch = chunk.chars().next_back().unwrap();
-            if self.grapheme_category(ch) == gr::GC_Prepend {
+            let after_is_control =
+                matches!(self.cat_after, Some(gr::GC_Control | gr::GC_CR | gr::GC_LF));
+            if self.grapheme_category(ch) == gr::GC_Prepend && !after_is_control {
                 self.decide(false); // GB9b
                 return;
             }
@@ -424,7 +435,9 @@ impl GraphemeCursor {
         match self.state {
             GraphemeState::InCbConsonant => self.handle_incb_consonant(chunk, chunk_start),
             GraphemeState::Regional => self.handle_regional(chunk, chunk_start),
-            GraphemeState::Emoji => self.handle_emoji(chunk, chunk_start),
+            GraphemeState::Emoji | GraphemeState::EmojiExtends => {
+                self.handle_emoji(chunk, chunk_start)
+            }
             _ => {
                 if self.cat_before.is_none() && self.offset == chunk.len() + chunk_start {
                     let ch = chunk.chars().next_back().unwrap();
@@ -535,11 +548,14 @@ impl GraphemeCursor {
     fn handle_emoji(&mut self, chunk: &str, chunk_start: usize) {
         use crate::tables::grapheme as gr;
         let mut iter = chunk.chars().rev();
-        if let Some(ch) = iter.next() {
-            if self.grapheme_category(ch) != gr::GC_ZWJ {
-                self.decide(true);
-                return;
+        if self.state != GraphemeState::EmojiExtends {
+            if let Some(ch) = iter.next() {
+                if self.grapheme_category(ch) != gr::GC_ZWJ {
+                    self.decide(true);
+                    return;
+                }
             }
+            self.state = GraphemeState::EmojiExtends;
         }
         for ch in iter {
             match self.grapheme_category(ch) {
@@ -558,7 +574,7 @@ impl GraphemeCursor {
             self.decide(true);
         } else {
             self.pre_context_offset = Some(chunk_start);
-            self.state = GraphemeState::Emoji;
+            self.state = GraphemeState::EmojiExtends;
         }
     }
 
@@ -615,7 +631,10 @@ impl GraphemeCursor {
             let mut need_pre_context = true;
             match self.cat_after.unwrap() {
                 gr::GC_InCB_Consonant => self.state = GraphemeState::InCbConsonant,
-                gr::GC_Regional_Indicator => self.state = GraphemeState::Regional,
+                gr::GC_Regional_Indicator => {
+                    self.state = GraphemeState::Regional;
+                    need_pre_context = self.ris_count.is_none();
+                }
                 gr::GC_Extended_Pictographic => self.state = GraphemeState::Emoji,
                 _ => need_pre_context = self.cat_before.is_none(),
             }
