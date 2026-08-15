@@ -2,3 +2,5 @@ target
 scripts/tmp
 *.pyc
 *.txt
+/.cargo/local.toml
+/.cargo/local/
